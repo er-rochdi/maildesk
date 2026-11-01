@@ -24,10 +24,10 @@ Le **Journal d’activité** indique l’auteur de la demande d’envoi et les u
 
 ## Démarrage local
 
-Le site est servi par Herd : http://maildesk.test. Ne pas démarrer de serveur PHP supplémentaire.
+Avec Laravel Herd, le site est accessible à l’adresse correspondant au dossier du projet. Il n’est pas nécessaire de démarrer un serveur PHP supplémentaire.
 
 ```sh
-cd /Users/kara/Herd/project_codex/maildesk
+cd maildesk
 ./start.sh
 ```
 
@@ -43,34 +43,23 @@ Configurer une boîte depuis l’interface, puis lancer Synchroniser. Renseigner
 
 Tests en base isolée : séparation des sociétés, accès/révocation, lectures par utilisateur, protection des pièces jointes, idempotence des envois, échec SMTP, échec de copie IMAP, décodage MIME réel avec connexion IMAP simulée et construction des emails sortants. L’interface est vérifiée avec des données simulées. Ces tests ne prouvent pas une connexion à Hestia ou la livraison réelle.
 
-Validation réelle du 31 octobre 2026 : nouveau message avec fichier, réponse d’un second acteur de test, transfert du fichier vers contact@bestoasis.ma, SMTP Hestia et retour IMAP ; contenu du fichier identique et copie Sent réussie. Base de test en mémoire, aucun utilisateur de test ajouté à la société réelle. Trois emails portant le préfixe « Maildesk QA » restent dans la boîte réelle. Cette boucle locale au domaine ne valide pas la livraison vers Gmail via Resend.
-
 Le suivi IMAP des non-remises concerne uniquement les rapports structurés effectivement reçus et synchronisés après cette fonctionnalité. Le suivi Resend ci-dessous complète ces rapports. Aucun rapprochement par objet ou par texte libre n’est effectué.
 
-## Resend et webhooks locaux
+## Envoi avec Resend
 
 Configurer dans `.env` :
 
 ```dotenv
-RESEND_API_KEY=cle_privee_resend
+RESEND_API_KEY=
 RESEND_SEND_VIA_API=true
-RESEND_WEBHOOK_SECRET=whsec_secret_du_webhook
+RESEND_WEBHOOK_SECRET=
 ```
 
-L’envoi API doit également être autorisé par l’opérateur pour chaque boîte (`resend_enabled=true` en base). Ce champ n’est ni assignable en masse ni modifiable par les formulaires/API des sociétés : une nouvelle société ne peut pas utiliser la clé globale pour usurper une adresse vérifiée. Sans cette autorisation, la boîte conserve son envoi SMTP Hestia. La réception et la copie Sent utilisent toujours les identifiants IMAP de la boîte.
+Renseigner la clé API et le secret de signature fournis par Resend. L’envoi API doit également être autorisé par l’opérateur pour chaque boîte. Sans cette autorisation, la boîte conserve son envoi SMTP Hestia. La réception et la copie Sent utilisent toujours les identifiants IMAP de la boîte.
 
 Le webhook est `POST /webhooks/resend`. Abonner Resend aux événements `email.sent`, `email.delivered`, `email.delivery_delayed`, `email.bounced`, `email.failed`, `email.suppressed`. La clé de signature se configure séparément de la clé API. Le serveur vérifie la signature Svix sur les octets bruts et une tolérance de 5 minutes ; lui seul est exempté de CSRF. Les événements sont dédupliqués et ne relancent jamais l’envoi. Un retard ne remplace pas une livraison confirmée et une livraison tardive ne masque pas un refus. Les événements destinés à d’autres applications/sociétés sont ignorés.
 
-Pour un test sans déploiement, lancer dans deux terminaux :
-
-```sh
-node scripts/webhook-proxy.mjs
-cloudflared tunnel --url http://127.0.0.1:8789 --no-autoupdate --protocol http2
-```
-
-Utiliser le lien HTTPS produit, suivi de `/webhooks/resend`, dans Resend. Le proxy de développement expose uniquement ce webhook et `/health` ; le reste de Maildesk retourne 404. Les pages d’erreur Laravel ne sont pas transmises. Le lien change lorsqu’un nouveau tunnel est créé : mettre à jour l’URL dans Resend, conserver sa clé de signature, et laisser le Mac et les deux processus allumés pendant les tests. Le binaire utilisé durant la validation est téléchargé dans `/tmp/maildesk-webhook-tools/cloudflared`, sans installation globale.
-
-Validation du 31 octobre 2026 : envois API vers les adresses officielles `delivered+…@resend.dev` et `bounced+…@resend.dev`, réception de quatre vrais callbacks signés via le tunnel HTTPS, états livré/refusé associés aux bons messages et copies Sent réussies. Ces adresses simulent les issues de livraison chez Resend ; ce test ne prouve pas un placement en boîte de réception Gmail. L’URL temporaire et l’identifiant du webhook de développement se trouvent dans `storage/app/private/resend-webhook.json` (aucune clé dans ce fichier).
+Configurer dans Resend l’URL HTTPS de l’application suivie de `/webhooks/resend`.
 
 ## Exploitation
 
