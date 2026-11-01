@@ -10,7 +10,7 @@ class Message extends Model
 
     protected function casts(): array
     {
-        return ['to' => 'array', 'cc' => 'array', 'message_at' => 'datetime', 'sent_at' => 'datetime'];
+        return ['to' => 'array', 'cc' => 'array', 'bcc' => 'array', 'message_at' => 'datetime', 'sent_at' => 'datetime'];
     }
 
     public function mailbox()
@@ -31,5 +31,19 @@ class Message extends Model
     public function attachments()
     {
         return $this->hasMany(Attachment::class);
+    }
+
+    public function notes() { return $this->hasMany(MessageNote::class); }
+
+    public function visibleActivityFor(User $user): static
+    {
+        if (! $user->hasPermission('view_send_activity')) {
+            $this->makeHidden(['sender_user_id', 'sender'])->unsetRelation('sender');
+        }
+        if (! $user->hasPermission('view_read_activity')) {
+            $this->makeHidden('readers')->unsetRelation('readers');
+        }
+
+        return $this;
     }
 }

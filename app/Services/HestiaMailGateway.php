@@ -13,6 +13,7 @@ use Symfony\Component\Mime\Address;
 use Symfony\Component\Mime\Email;
 use Webklex\PHPIMAP\Client;
 use Webklex\PHPIMAP\ClientManager;
+use Webklex\PHPIMAP\Support\MessageCollection;
 
 class HestiaMailGateway implements MailGateway
 {
@@ -27,32 +28,46 @@ class HestiaMailGateway implements MailGateway
             $status = $folder->status();
             $validity = hash('sha256', strtolower($mailbox->imap_host)).':'.$status['uidvalidity'];
             $after = $validity === $mailbox->uid_validity ? $mailbox->last_uid : 0;
-            $messages = [];
-            $items = $folder->query()->whereUid(($after + 1).':*')->setFetchOrderAsc()->leaveUnread()->limit(50)->get();
-            foreach ($items as $item) {
+            $items = $folder->query()->whereUid(($after + 1).':*')->setFetchOrderAsc()->leaveUnread()->setFetchBody(false)->limit(50)->get();
+
+            return ['validity' => $validity, 'messages' => $this->messages($client, $items, $after)];
+        } catch (\Throwable $e) {
+            $client->disconnect();
+            throw $e;
+        }
+    }
+
+    private function messages(Client $client, MessageCollection $items, int $after): \Generator
+    {
+        try {
+            // Shift headers out of the collection so processed bodies are not retained for the whole batch.
+            while ($items->isNotEmpty()) {
+                $item = $items->shift();
                 $uid = (int) $item->getUid();
                 // IMAP ranges can return the final UID when the lower bound is beyond the final message.
                 if ($uid <= $after) {
                     continue;
                 }
+                $item->parseBody();
                 $from = $item->getFrom()->first();
                 $attachments = [];
                 foreach ($item->getAttachments() as $attachment) {
                     $attachments[] = ['name' => Attachment::safeName($attachment->getName() ?: 'piece-jointe'), 'content' => $attachment->getContent()];
                 }
                 $text = $item->getTextBody();
-                $messages[] = [
+                $html = $item->getHTMLBody() ?: null;
+                yield [
                     'remote_uid' => $uid, 'internet_message_id' => mb_substr((string) $item->getMessageId(), 0, 255),
                     'from_address' => mb_substr($from->mail ?? '', 0, 255), 'from_name' => mb_substr($from->personal ?? '', 0, 255),
                     'to' => $this->addresses($item->getTo()), 'cc' => $this->addresses($item->getCc()),
                     'subject' => mb_substr((string) $item->getSubject(), 0, 255),
-                    'body' => $text ?: html_entity_decode(strip_tags(preg_replace('/<(script|style)\b[^>]*>.*?<\/\1>/is', '', $item->getHTMLBody() ?: '')), ENT_QUOTES | ENT_HTML5, 'UTF-8'),
+                    'body' => $text ?: html_entity_decode(strip_tags(preg_replace('/<(script|style)\b[^>]*>.*?<\/\1>/is', '', $html ?: '')), ENT_QUOTES | ENT_HTML5, 'UTF-8'),
+                    'html_body' => $html ? (new SafeEmailHtml)->clean($html) : null,
                     'message_at' => $item->getDate()->first() ?: now(), 'attachments' => $attachments,
                     'delivery_report' => (new DeliveryReport)->parse((string) $item->getHeader()->get('content_type')->first(), $item->getHeader()->getBoundary() ?? '', $item->getRawBody()),
                 ];
+                unset($item, $attachments, $text, $html);
             }
-
-            return ['validity' => $validity, 'messages' => $messages];
         } finally {
             $client->disconnect();
         }
@@ -112,6 +127,9 @@ class HestiaMailGateway implements MailGateway
         $email = (new Email)->from(new Address($mailbox->email, $mailbox->name))->to(...$message->to)->subject($message->subject)->text($message->body)->date($message->message_at);
         if ($message->cc) {
             $email->cc(...$message->cc);
+        }
+        if ($message->bcc) {
+            $email->bcc(...$message->bcc);
         }
         $email->getHeaders()->addIdHeader('Message-ID', $message->internet_message_id);
         if ($message->reply_to_id) {

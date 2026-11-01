@@ -23,6 +23,7 @@ class WorkspaceController extends Controller
         });
         Auth::login($user);
         $request->session()->regenerate();
+        $request->session()->put('session_version', $user->session_version);
 
         return $this->me($request);
     }
@@ -30,10 +31,11 @@ class WorkspaceController extends Controller
     public function login(Request $request)
     {
         $credentials = $request->validate(['email' => 'required|email', 'password' => 'required|string']);
-        if (! Auth::attempt($credentials)) {
+        if (! Auth::attempt($credentials + ['is_active' => true])) {
             return response()->json(['message' => 'Adresse email ou mot de passe incorrect.'], 422);
         }
         $request->session()->regenerate();
+        $request->session()->put('session_version', Auth::user()->session_version);
 
         return $this->me($request);
     }
@@ -57,29 +59,55 @@ class WorkspaceController extends Controller
 
     private function admin(Request $request): void
     {
-        abort_unless($request->user()->role === 'admin', 403);
+        abort_unless($request->user()->role === 'admin' && $request->user()->company_id !== null, 403);
+    }
+
+    private function permission(Request $request, string $permission): void
+    {
+        abort_unless($request->user()->company_id !== null && $request->user()->hasPermission($permission), 403);
     }
 
     public function users(Request $request)
     {
-        $this->admin($request);
+        abort_unless($request->user()->company_id !== null && ($request->user()->hasPermission('manage_users') || $request->user()->hasPermission('manage_mailboxes')), 403);
 
-        return User::where('company_id', $request->user()->company_id)->select('id', 'name', 'email', 'role')->orderBy('name')->get();
+        return User::where('company_id', $request->user()->company_id)->select('id', 'name', 'email', 'role', 'permissions', 'is_active')->orderBy('name')->get();
     }
 
     public function createUser(Request $request)
     {
-        $this->admin($request);
-        $data = $request->validate(['name' => 'required|string|max:150', 'email' => 'required|email|max:255|unique:users', 'password' => ['required', Password::min(8)], 'role' => ['required', Rule::in(['admin', 'member'])]]);
+        $this->permission($request, 'manage_users');
+        $data = $request->validate([
+            'name' => 'required|string|max:150', 'email' => 'required|email|max:255|unique:users',
+            'password' => ['required', Password::min(8)], 'role' => ['required', Rule::in(['admin', 'member'])],
+            'permissions' => 'sometimes|array', 'permissions.*' => ['required', 'string', 'distinct', Rule::in(User::PERMISSIONS)],
+        ]);
+        $isAdmin = $request->user()->role === 'admin';
+        abort_if(! $isAdmin && ($data['role'] !== 'member' || ! empty($data['permissions'])), 403, 'Seul un administrateur peut attribuer des rôles ou des permissions.');
+        $data['permissions'] = $isAdmin && $data['role'] === 'member' ? ($data['permissions'] ?? User::DEFAULT_PERMISSIONS) : [];
 
         return User::create($data + ['company_id' => $request->user()->company_id]);
+    }
+
+    public function updatePermissions(Request $request, User $user)
+    {
+        $this->admin($request);
+        abort_unless($request->user()->company_id !== null && $user->company_id === $request->user()->company_id, 404);
+        abort_if($user->role === 'admin', 422, 'Les administrateurs disposent déjà de toutes les permissions.');
+        $data = $request->validate([
+            'permissions' => 'present|array',
+            'permissions.*' => ['required', 'string', 'distinct', Rule::in(User::PERMISSIONS)],
+        ]);
+        $user->update($data);
+
+        return response()->json($user->only(['id', 'name', 'email', 'role', 'permissions', 'is_active']));
     }
 
     public function mailboxes(Request $request)
     {
         $user = $request->user();
         $query = Mailbox::where('company_id', $user->company_id);
-        if ($user->role !== 'admin') {
+        if (! $user->hasPermission('manage_mailboxes')) {
             $query->whereHas('users', fn ($q) => $q->where('users.id', $user->id));
         }
 
@@ -88,7 +116,7 @@ class WorkspaceController extends Controller
 
     public function createMailbox(Request $request)
     {
-        $this->admin($request);
+        $this->permission($request, 'manage_mailboxes');
         $companyId = $request->user()->company_id;
         $data = $request->validate([
             'sent_folder' => ['sometimes', 'required', 'string', 'max:150', 'not_regex:/[\x00-\x1F\x7F]/'],
@@ -110,7 +138,7 @@ class WorkspaceController extends Controller
 
     public function updateMailbox(Request $request, Mailbox $mailbox)
     {
-        $this->admin($request);
+        $this->permission($request, 'manage_mailboxes');
         abort_unless($mailbox->company_id === $request->user()->company_id, 404);
         $data = $request->validate([
             'name' => 'required|string|max:150',
@@ -131,7 +159,7 @@ class WorkspaceController extends Controller
 
     public function updateAccess(Request $request, Mailbox $mailbox)
     {
-        $this->admin($request);
+        $this->permission($request, 'manage_mailboxes');
         abort_unless($mailbox->company_id === $request->user()->company_id, 404);
         $data = $request->validate(['user_ids' => 'present|array', 'user_ids.*' => ['integer', Rule::exists('users', 'id')->where('company_id', $request->user()->company_id)]]);
         $mailbox->users()->sync($data['user_ids']);

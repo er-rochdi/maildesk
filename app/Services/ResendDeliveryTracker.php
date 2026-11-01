@@ -37,7 +37,7 @@ class ResendDeliveryTracker
                 || ($message->provider_message_id && $message->provider_message_id !== $data['email_id'])) {
                 return false;
             }
-            $expected = array_values(array_unique(array_map('strtolower', array_merge($message->to, $message->cc ?? []))));
+            $expected = array_values(array_unique(array_map('strtolower', array_merge($message->to, $message->cc ?? [], $message->bcc ?? []))));
             if (! $recipients || array_diff($recipients, $expected)) {
                 return false;
             }
@@ -72,7 +72,9 @@ class ResendDeliveryTracker
                     'archive_error' => $message->archive_error ?? 'Envoi confirmé par Resend. Copie dans le dossier Envoyés du serveur non confirmée.'];
             }
             if ($failed) {
-                $changes['delivery_error'] = mb_substr('Refus signalé par Resend pour : '.implode(', ', $failed), 0, 255);
+                $visible = array_map('strtolower', array_merge($message->to, $message->cc ?? []));
+                $labels = array_unique(array_map(fn ($recipient) => in_array($recipient, $visible, true) ? $recipient : 'destinataire en copie cachée', $failed));
+                $changes['delivery_error'] = mb_substr('Refus signalé par Resend pour : '.implode(', ', $labels), 0, 255);
             }
             $message->update($changes);
 

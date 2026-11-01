@@ -7,7 +7,7 @@ import * as Vue from 'vue';
 const { descriptor } = parse(readFileSync(new URL('../../resources/js/components/MailWorkspace.vue', import.meta.url), 'utf8'));
 const compiled = compileScript(descriptor, { id: 'mail-workspace-test', genDefaultAs: 'Component' }).content
   .replace(/^import \{([^}]+)\} from 'vue';/m, 'const {$1} = Vue;')
-  .replace(/^import AppIcon from .*;$/m, 'const AppIcon = {};');
+  .replace(/^import (AppIcon|MessageTeam) from .*;$/gm, 'const $1 = {};');
 const Component = new Function('Vue', `${compiled}\nComponent.render = () => null; return Component;`)(Vue);
 const renderer = Vue.createRenderer({
   createElement: () => ({}), createComment: () => ({}), createText: () => ({}),
@@ -15,20 +15,69 @@ const renderer = Vue.createRenderer({
   parentNode: () => null, nextSibling: () => null,
 });
 
-function workspace(t) {
-  const pending = new Map(), reads = [];
+function workspace(t, props = {}) {
+  const pending = new Map(), reads = [], calls = [];
   const api = async (url, options) => {
+    calls.push(url);
     if (options?.method === 'POST') { reads.push(url); return { id: Number(url.split('/')[3]) }; }
     if (/^\/workspace\/messages\/\d+$/.test(url)) return new Promise(resolve => pending.set(Number(url.split('/')[3]), resolve));
     return { data: [], last_page: 1 };
   };
-  const app = renderer.createApp(Component, { api, boxes: [{ id: 1 }], direction: 'inbound' });
+  const app = renderer.createApp(Component, { api, boxes: [{ id: 1 }], direction: 'inbound', ...props });
   const state = app.mount({}).$.setupState;
   let mounted = true;
   const unmount = () => { if (mounted) { mounted = false; app.unmount(); } };
   t.after(unmount);
-  return { state, pending, reads, unmount };
+  return { state, pending, reads, calls, unmount };
 }
+
+test('does not request the inbox when only sending is allowed', async t => {
+  const { state, calls } = workspace(t, { canRead: false, canSend: true, canSync: false });
+  await Vue.nextTick();
+  await state.load();
+  assert.deepEqual(calls, []);
+  assert.deepEqual([...state.items], []);
+});
+
+test('sync-only accounts can synchronize without requesting messages', async t => {
+  const { state, calls } = workspace(t, { canRead: false, canSend: false, canSync: true });
+  await Vue.nextTick();
+  await state.sync();
+  assert.deepEqual(calls, ['/workspace/mailboxes/1/sync']);
+  assert.deepEqual([...state.items], []);
+});
+
+test('moving the last message on page two reloads the first page', async t => {
+  const calls = [];
+  const remaining = { id: 1, subject: 'Still in the inbox' };
+  const { state } = workspace(t, { api: async (url, options) => {
+    calls.push([url, options?.method]);
+    if (options?.method === 'PUT') return { folder: 'archive' };
+    return { data: new URL(url, 'http://localhost').searchParams.get('page') === '1' ? [remaining] : [], last_page: 1 };
+  } });
+  await Vue.nextTick();
+  state.currentPage = 2; state.lastPage = 2; state.selected = { id: 31 };
+  calls.length = 0;
+  await state.move('archive');
+  assert.deepEqual(calls, [
+    ['/workspace/messages/31/folder', 'PUT'],
+    ['/workspace/mailboxes/1/messages?direction=inbound&folder=inbox&q=&page=1', undefined],
+  ]);
+  assert.equal(state.currentPage, 1);
+  assert.equal(state.lastPage, 1);
+  assert.equal(state.selected, null);
+  assert.deepEqual([...state.items], [remaining]);
+});
+
+test('adds the personal signature when composing and preserves the quoted message', async t => {
+  const { state } = workspace(t, { signature: 'Cordialement,\nAmina' });
+  state.newMessage();
+  assert.equal(state.compose.body, '\n\nCordialement,\nAmina');
+  state.selected = { id: 7, from_address: 'client@example.test', subject: 'Devis', body: 'Texte original', message_at: '2026-11-01T10:00:00Z', attachments: [] };
+  state.newMessage('reply');
+  assert.ok(state.compose.body.indexOf('Cordialement,\nAmina') < state.compose.body.indexOf('Texte original'));
+  assert.equal(state.compose.reply_to_id, 7);
+});
 
 test('does not record a read when the user leaves before message details arrive', async t => {
   const { state, pending, reads, unmount } = workspace(t);

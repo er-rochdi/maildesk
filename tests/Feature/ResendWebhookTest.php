@@ -92,6 +92,19 @@ class ResendWebhookTest extends TestCase
         $this->assertSame('failed', $message->fresh()->delivery_status);
     }
 
+    public function test_bcc_recipient_is_included_in_delivery_tracking(): void
+    {
+        $message = $this->message();
+        $message->update(['bcc' => ['private@example.test']]);
+        $this->signed($this->event($message), 'msg_to')->assertOk()->assertJsonPath('matched', true);
+        $this->assertSame('partial', $message->fresh()->delivery_status);
+        $this->signed($this->event($message, to: ['private@example.test']), 'msg_bcc')->assertOk()->assertJsonPath('matched', true);
+        $this->assertSame('delivered', $message->fresh()->delivery_status);
+        $this->signed($this->event($message, 'email.bounced', ['private@example.test']), 'msg_bcc_bounce')->assertOk();
+        $this->assertStringNotContainsString('private@example.test', $message->fresh()->delivery_error);
+        $this->assertStringContainsString('copie cachée', $message->fresh()->delivery_error);
+    }
+
     public function test_all_recipients_must_be_delivered_and_partial_failures_remain_visible(): void
     {
         $message = $this->message(['one@example.test', 'two@example.test']);

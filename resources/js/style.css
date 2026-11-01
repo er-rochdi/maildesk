@@ -11,6 +11,24 @@
 .link:hover{color:#3d3fb4}
 button:focus-visible{outline:3px solid #a9abfa;outline-offset:3px}
 .wide{width:100%}
+.users-table .table-head,.users-table .table-row{grid-template-columns:minmax(180px,1fr) 130px 150px minmax(160px,auto);gap:16px}
+.account-actions{display:flex;gap:8px;flex-wrap:wrap}.account-actions .secondary{padding:8px 10px;min-height:38px}.secondary.danger{color:#b13a42;border-color:#efd6d9}.account-status{display:block;font-size:11px;color:#20855e;margin-top:6px}.account-status.inactive{color:#ad3d46}
+.account-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px;max-width:1100px}.account-card{background:white;border:1px solid #e4e8f0;border-radius:14px;padding:26px}.account-card h2{font-size:18px;margin-bottom:8px}.account-card>.muted{margin-bottom:24px}.account-card fieldset,.auth-fields{border:0;padding:0;margin:0;min-width:0}.account-card label{display:grid;gap:8px;margin:18px 0;font-size:13px;font-weight:600}.account-card input{width:100%;min-width:0;border:1px solid #dfe4ee;border-radius:9px;padding:12px 14px;color:#344259}.account-card input:focus{outline:2px solid #c5c6fa;outline-offset:1px}.account-card .form-hint{margin-bottom:20px}.auth-form .notice{margin:20px 0;line-height:1.6}
+.team-work{margin-top:20px;padding:22px;border:1px solid #e4e8f0;border-radius:12px;background:#fff}.team-work h3{margin:18px 0 8px}.team-work h3:first-child{margin-top:0}.team-work label{display:grid;gap:7px;font-size:13px;margin:14px 0}.team-work textarea{width:100%;border:1px solid #dfe4ee;border-radius:9px;padding:12px;font:inherit;resize:vertical}.team-note{padding:12px 0;border-bottom:1px solid #edf0f5;font-size:13px}.team-note small{margin-left:10px;color:#8993a5}.team-note p{white-space:pre-wrap;overflow-wrap:anywhere;margin-top:6px}
+.account-card textarea{width:100%;min-width:0;border:1px solid #dfe4ee;border-radius:9px;padding:12px 14px;color:#344259;font:inherit;resize:vertical}
+.local-folders{display:flex;align-items:end;gap:16px;flex-wrap:wrap;margin-top:14px}.local-folders label{display:grid;gap:6px;font-size:12px;color:#6f7c91;min-width:200px}.local-folders .form-hint{margin:0 0 6px}.local-folder-actions{flex-wrap:wrap;margin-bottom:20px}
+.html-email{display:block;width:100%;height:420px;border:1px solid #e4e8f0;border-radius:8px;margin:18px 0;background:#fff}
+.team-work .form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+@media(max-width:760px){.team-work .form-grid{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:1100px){.users-table .table-head{display:none}.users-table .table-row{grid-template-columns:minmax(0,1fr) 140px}.account-actions{grid-column:1/-1}.account-grid{grid-template-columns:minmax(0,1fr)}}
+.users-table .member{min-width:0}.users-table .member>div:last-child{min-width:0;overflow-wrap:anywhere}
+.permission-choices{border:0;padding:0;margin:20px 0;min-width:0}
+.permission-choices legend{font-size:13px;font-weight:700;color:#34475f;margin-bottom:14px}
+.modal .permission-choices label{display:flex;align-items:flex-start;gap:10px;padding:14px;border:1px solid #e4e8f0;border-radius:9px;font-weight:500}
+.permission-choices input[type=checkbox]{width:17px;height:17px;margin:2px 0 0;flex-shrink:0;accent-color:#5355db}
+.permission-choices small{display:block;color:#7d8fa0;font-size:12px;font-weight:400;line-height:1.5;margin-top:5px}
+.permissions-modal .modal-title p{overflow-wrap:anywhere}
+@media(max-width:760px){.users-table .table-head{display:none}.users-table .table-row{grid-template-columns:minmax(0,1fr);gap:12px}.users-table .secondary{justify-self:start}.permissions-modal .modal-actions{flex-wrap:wrap}}
 /* Shared native selects: reserve room for the chevron on every screen. */
 select{
   -webkit-appearance:none;

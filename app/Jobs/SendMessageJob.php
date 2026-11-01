@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Contracts\MailGateway;
+use App\Exceptions\MailAttachmentUnavailable;
 use App\Models\Message;
 use App\Models\User;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
@@ -35,7 +36,7 @@ class SendMessageJob implements ShouldBeUnique, ShouldQueue
         }
         $message = Message::findOrFail($this->messageId);
         $actor = $message->sender_user_id ? User::find($message->sender_user_id) : null;
-        if (! $actor || $actor->company_id !== $message->mailbox->company_id || ($actor->role !== 'admin' && ! $message->mailbox->users()->whereKey($actor->id)->exists())) {
+        if (! $actor || ! $actor->hasPermission('send_emails') || $actor->company_id !== $message->mailbox->company_id || ($actor->role !== 'admin' && ! $message->mailbox->users()->whereKey($actor->id)->exists())) {
             $message->update(['status' => 'failed', 'send_error' => 'Envoi annulé : accès à la boîte révoqué.']);
 
             return;
@@ -43,6 +44,10 @@ class SendMessageJob implements ShouldBeUnique, ShouldQueue
         try {
             $gateway->send($message);
             $message->update(['status' => 'sent', 'sent_at' => now(), 'send_error' => null]);
+        } catch (MailAttachmentUnavailable $e) {
+            $message->update(['status' => 'failed', 'send_error' => $e->getMessage()]);
+
+            return;
         } catch (\Throwable $e) {
             $confirmed = DB::transaction(function () use ($message) {
                 $current = Message::whereKey($message->id)->lockForUpdate()->firstOrFail();

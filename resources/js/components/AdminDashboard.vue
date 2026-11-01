@@ -2,7 +2,7 @@
 import { ref, computed, watch, nextTick } from 'vue';
 import AppIcon from './AppIcon.vue';
 
-const props = defineProps({ api: Function, boxes: Array });
+const props = defineProps({ api: Function, boxes: Array, canViewSendActivity: { type: Boolean, default: true }, canViewReadActivity: { type: Boolean, default: true } });
 const period = ref('all'), mailboxId = ref(''), kind = ref('all'), actorId = ref(''), search = ref('');
 const dashboard = ref(null), activity = ref(null), summaryBusy = ref(false), activityBusy = ref(false);
 const error = ref(''), activityError = ref(''), page = ref(1), selected = ref(null), auditDialog = ref(null);
@@ -99,12 +99,12 @@ watch([kind, actorId], searchJournal);
           </div>
           <div class="sr-only"><table><caption>Activité email quotidienne</caption><thead><tr><th>Date</th><th>Envoyés</th><th>Reçus</th></tr></thead><tbody><tr v-for="day in trend" :key="day.day"><td>{{ day.day }}</td><td>{{ day.sent }}</td><td>{{ day.received }}</td></tr></tbody></table></div>
         </section>
-        <section class="dashboard-panel team-panel">
+        <section v-if="canViewSendActivity || canViewReadActivity" class="dashboard-panel team-panel">
           <div class="panel-heading"><div><h2>Votre équipe</h2><p>Emails de la période sélectionnée</p></div><AppIcon name="users" /></div>
           <div class="team-heading"><span>MEMBRE</span><span>ENVOYÉS</span><span>OUVERTS</span></div>
           <div class="team-list">
             <button v-for="member in dashboard.team" :key="member.id" class="team-row" :aria-label="`Voir l’activité de ${member.name}`" @click="filterJournal('all', member.id)">
-              <span class="team-person"><span class="team-avatar">{{ member.name.slice(0, 2).toUpperCase() }}</span><span>{{ member.name }}<small>{{ member.role === 'admin' ? 'Administrateur' : 'Membre' }}</small></span></span><strong>{{ format(member.sent_count) }}</strong><strong>{{ format(member.read_count) }}</strong>
+              <span class="team-person"><span class="team-avatar">{{ member.name.slice(0, 2).toUpperCase() }}</span><span>{{ member.name }}<small>{{ member.role === 'admin' ? 'Administrateur' : 'Membre' }}</small></span></span><strong>{{ canViewSendActivity ? format(member.sent_count) : '—' }}</strong><strong>{{ canViewReadActivity ? format(member.read_count) : '—' }}</strong>
             </button>
           </div>
         </section>
@@ -115,7 +115,7 @@ watch([kind, actorId], searchJournal);
       <form class="journal-filters" @submit.prevent="searchJournal">
         <label class="search-label"><span class="sr-only">Rechercher dans le journal</span><input v-model="search" type="search" maxlength="150" placeholder="Objet ou adresse email…"></label>
         <label><span class="sr-only">Type d’activité</span><select v-model="kind"><option value="all">Tous les emails</option><option value="sent">Emails envoyés</option><option value="received">Emails reçus</option><option value="unread">Non ouverts</option><option value="issues">Envois à vérifier</option><option value="pending">En attente</option></select></label>
-        <label><span class="sr-only">Utilisateur du journal</span><select v-model="actorId"><option value="">Tous les utilisateurs</option><option v-for="member in dashboard?.team || []" :key="member.id" :value="String(member.id)">{{ member.name }}</option></select></label>
+        <label v-if="canViewSendActivity || canViewReadActivity"><span class="sr-only">Utilisateur du journal</span><select v-model="actorId"><option value="">Tous les utilisateurs</option><option v-for="member in dashboard?.team || []" :key="member.id" :value="String(member.id)">{{ member.name }}</option></select></label>
         <button class="secondary">Rechercher</button>
       </form>
       <div v-if="activityError" class="alert" role="alert">{{ activityError }} <button class="link" @click="loadActivity">Réessayer</button></div>
@@ -124,8 +124,8 @@ watch([kind, actorId], searchJournal);
         <table class="journal-table"><thead><tr><th>Email</th><th>Envoyé par</th><th>Ouvert par</th><th>État</th><th><span class="sr-only">Détails</span></th></tr></thead><tbody>
           <tr v-for="message in activity.data" :key="message.id">
             <td class="journal-email"><strong>{{ message.subject || '(Sans objet)' }}</strong><span>{{ message.mailbox.email }} · {{ message.direction === 'inbound' ? 'Reçu' : 'Envoi' }}</span><small>{{ date(message.sent_at || message.message_at) }}</small></td>
-            <td data-label="Envoyé par"><span v-if="message.direction === 'outbound'">{{ message.sender?.name || 'Auteur non renseigné' }}</span><span v-else class="journal-muted">{{ message.from_address }}</span></td>
-            <td data-label="Ouvert par"><span v-if="message.readers.length">{{ message.readers.slice(0, 2).map(reader => reader.name).join(', ') }}<small v-if="message.readers.length > 2"> +{{ message.readers.length - 2 }}</small></span><span v-else class="journal-muted">Aucune ouverture</span></td>
+            <td data-label="Envoyé par"><span v-if="message.direction === 'outbound'">{{ canViewSendActivity ? (message.sender?.name || 'Auteur non renseigné') : 'Non autorisé' }}</span><span v-else class="journal-muted">{{ message.from_address }}</span></td>
+            <td data-label="Ouvert par"><span v-if="!canViewReadActivity" class="journal-muted">Non autorisé</span><span v-else-if="message.readers?.length">{{ message.readers.slice(0, 2).map(reader => reader.name).join(', ') }}<small v-if="message.readers.length > 2"> +{{ message.readers.length - 2 }}</small></span><span v-else class="journal-muted">Aucune ouverture</span></td>
             <td data-label="État"><span class="audit-status" :class="{ warning: message.delivery_error || ['failed', 'uncertain'].includes(message.status), delivered: message.delivery_status === 'delivered' && !message.delivery_error }">{{ statusLabel(message) }}</span></td>
             <td><button class="link" :aria-label="`Voir l’activité de l’email ${message.subject || 'sans objet'}`" @click="inspect(message)">Voir l’activité <AppIcon name="arrow" /></button></td>
           </tr>
@@ -136,9 +136,9 @@ watch([kind, actorId], searchJournal);
     </section>
     <dialog ref="auditDialog" class="audit-dialog" aria-labelledby="audit-title" @close="selected = null" @click.self="closeAudit">
       <template v-if="selected"><div class="modal-title"><div><h2 id="audit-title">Activité de l’email</h2><p class="muted">{{ selected.subject || '(Sans objet)' }}</p></div><button class="close" aria-label="Fermer l’activité" @click="closeAudit"><AppIcon name="close" /></button></div>
-        <dl class="audit-summary"><div><dt>Boîte</dt><dd>{{ selected.mailbox.email }}</dd></div><div><dt>État</dt><dd>{{ statusLabel(selected) }}</dd></div><div v-if="selected.direction === 'inbound'"><dt>Expéditeur</dt><dd>{{ selected.from_address }}</dd></div><div><dt>Destinataires</dt><dd>{{ selected.to.join(', ') }}</dd></div><div v-if="selected.direction === 'outbound'"><dt>Envoi demandé par</dt><dd>{{ selected.sender?.name || 'Auteur non renseigné' }}<small>{{ date(selected.created_at) }}</small></dd></div><div v-if="selected.sent_at"><dt>Accepté pour envoi</dt><dd>{{ date(selected.sent_at) }}</dd></div></dl>
+        <dl class="audit-summary"><div><dt>Boîte</dt><dd>{{ selected.mailbox.email }}</dd></div><div><dt>État</dt><dd>{{ statusLabel(selected) }}</dd></div><div v-if="selected.direction === 'inbound'"><dt>Expéditeur</dt><dd>{{ selected.from_address }}</dd></div><div><dt>Destinataires</dt><dd>{{ selected.to.join(', ') }}</dd></div><div v-if="selected.direction === 'outbound'"><dt>Envoi demandé par</dt><dd>{{ canViewSendActivity ? (selected.sender?.name || 'Auteur non renseigné') : 'Non autorisé' }}<small>{{ date(selected.created_at) }}</small></dd></div><div v-if="selected.sent_at"><dt>Accepté pour envoi</dt><dd>{{ date(selected.sent_at) }}</dd></div></dl>
         <h3>Ouvertures dans Maildesk</h3><p class="audit-hint">Première ouverture enregistrée pour chaque utilisateur.</p>
-        <ul v-if="selected.readers.length" class="audit-readers"><li v-for="reader in selected.readers" :key="reader.id"><span class="team-avatar">{{ reader.name.slice(0, 2).toUpperCase() }}</span><strong>{{ reader.name }}</strong><time>{{ date(reader.pivot.read_at) }}</time></li></ul><p v-else class="audit-no-read">Aucun utilisateur n’a encore ouvert cet email dans Maildesk.</p>
+        <p v-if="!canViewReadActivity" class="audit-no-read">Vous n’avez pas la permission de consulter les lecteurs.</p><ul v-else-if="selected.readers?.length" class="audit-readers"><li v-for="reader in selected.readers" :key="reader.id"><span class="team-avatar">{{ reader.name.slice(0, 2).toUpperCase() }}</span><strong>{{ reader.name }}</strong><time>{{ date(reader.pivot.read_at) }}</time></li></ul><p v-else class="audit-no-read">Aucun utilisateur n’a encore ouvert cet email dans Maildesk.</p>
         <p v-if="selected.delivery_error || selected.send_error" class="alert">{{ selected.delivery_error || selected.send_error }}</p>
       </template>
     </dialog>

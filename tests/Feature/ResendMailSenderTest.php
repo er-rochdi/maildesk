@@ -2,9 +2,11 @@
 
 namespace Tests\Feature;
 
+use App\Jobs\SendMessageJob;
 use App\Models\Company;
 use App\Models\Mailbox;
 use App\Models\Message;
+use App\Models\User;
 use App\Services\HestiaMailGateway;
 use App\Services\MailServerAddress;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -34,6 +36,7 @@ class ResendMailSenderTest extends TestCase
         Http::preventStrayRequests();
         Http::fake(['api.resend.com/emails' => Http::response(['id' => '2b533d25-4406-4a7b-8283-f7670864ee31'])]);
         $message = $this->message();
+        $message->update(['bcc' => ['private@example.test']]);
         Storage::disk('local')->put('qa/file', 'private bytes');
         $message->attachments()->create(['path' => 'qa/file', 'name' => 'devis.txt', 'size' => 13]);
         app(HestiaMailGateway::class)->send($message);
@@ -42,9 +45,28 @@ class ResendMailSenderTest extends TestCase
             && $request->hasHeader('Idempotency-Key', 'maildesk-'.$message->mailbox_id.'-'.$message->request_id)
             && $request['tags'][0]['value'] === $message->request_id
             && base64_decode($request['attachments'][0]['content']) === 'private bytes'
-            && $request['cc'] === ['copy@example.test']);
+            && $request['cc'] === ['copy@example.test'] && $request['bcc'] === ['private@example.test']);
         $this->assertSame('resend', $message->fresh()->provider);
         $this->assertSame('2b533d25-4406-4a7b-8283-f7670864ee31', $message->fresh()->provider_message_id);
+    }
+
+    public function test_missing_attachment_stops_before_any_provider_request(): void
+    {
+        Storage::fake('local');
+        Http::preventStrayRequests();
+        Http::fake();
+        $message = $this->message();
+        $message->attachments()->create(['path' => 'missing/file', 'name' => 'devis.txt', 'size' => 13]);
+        $actor = User::factory()->create(['company_id' => $message->mailbox->company_id, 'role' => 'admin']);
+        $message->update(['status' => 'queued', 'sender_user_id' => $actor->id]);
+        $gateway = app(HestiaMailGateway::class);
+        (new SendMessageJob($message->id))->handle($gateway);
+        $this->assertSame('failed', $message->fresh()->status);
+        $this->assertSame('Pièce jointe indisponible. Aucun envoi Resend n’a été effectué.', $message->fresh()->send_error);
+        $this->assertNull($message->fresh()->sent_at);
+        $this->assertNull($message->fresh()->archive_error);
+        (new SendMessageJob($message->id))->handle($gateway);
+        Http::assertNothingSent();
     }
 
     public function test_provider_failure_is_sanitized_and_not_retried(): void

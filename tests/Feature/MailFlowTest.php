@@ -26,7 +26,7 @@ class MailFlowTest extends TestCase
     {
         $company = Company::create(['name' => 'Societe A']);
         $admin = User::factory()->create(['company_id' => $company->id, 'role' => 'admin']);
-        $member = User::factory()->create(['company_id' => $company->id, 'role' => 'member']);
+        $member = User::factory()->create(['company_id' => $company->id, 'role' => 'member', 'permissions' => array_merge(User::DEFAULT_PERMISSIONS, ['view_send_activity', 'view_read_activity'])]);
         $otherCompany = Company::create(['name' => 'Societe B']);
         $other = User::factory()->create(['company_id' => $otherCompany->id, 'role' => 'admin']);
         $box = Mailbox::create(['company_id' => $company->id, 'name' => 'Contact', 'email' => 'contact@example.test', 'password' => 'test-secret', 'imap_host' => 'mail.example.test', 'imap_port' => 993, 'smtp_host' => 'mail.example.test', 'smtp_port' => 587]);
@@ -60,6 +60,76 @@ class MailFlowTest extends TestCase
         $this->assertDatabaseCount('messages', 2);
         $this->assertSame('200', $box->fresh()->uid_validity);
         $this->assertDatabaseCount('message_reads', 1);
+    }
+
+    public function test_zero_is_a_valid_mail_search_in_both_inbox_and_activity(): void
+    {
+        [$admin, , , $box] = $this->workspace();
+        $match = $this->received($box);
+        $match->update(['subject' => 'Facture 0']);
+        $this->received($box);
+
+        foreach (['/workspace/mailboxes/'.$box->id.'/messages', '/workspace/admin/activity'] as $url) {
+            $this->actingAs($admin)->getJson($url.'?q=0')->assertOk()
+                ->assertJsonPath('total', 1)->assertJsonPath('data.0.id', $match->id);
+            $this->getJson($url.'?q=')->assertOk()->assertJsonPath('total', 2);
+        }
+    }
+
+    public function test_sync_keeps_progress_when_a_later_message_cannot_be_fetched(): void
+    {
+        [$admin, $member, $other, $box] = $this->workspace();
+        $gateway = new FakeMailGateway;
+        $gateway->batch = ['validity' => '123', 'messages' => (function () use ($box) {
+            yield ['remote_uid' => 1, 'from_address' => 'client@example.test', 'to' => [$box->email], 'subject' => 'Saved first', 'body' => 'Bonjour', 'message_at' => now(), 'attachments' => []];
+            $this->assertDatabaseHas('messages', ['remote_uid' => 1]);
+            $this->assertSame(1, $box->fresh()->last_uid);
+            throw new \RuntimeException('IMAP body fetch failed');
+        })()];
+
+        try {
+            (new SyncMailbox($gateway))->run($box);
+            $this->fail('Expected sync failure');
+        } catch (\RuntimeException $e) {
+            $this->assertSame('La synchronisation de la boîte '.$box->id.' a échoué.', $e->getMessage());
+        }
+        $this->assertDatabaseCount('messages', 1);
+        $this->assertSame('123', $box->fresh()->uid_validity);
+        $this->assertNotNull($box->fresh()->sync_error);
+        $gateway->batch = ['validity' => '123', 'messages' => []];
+        (new SyncMailbox($gateway))->run($box);
+        $this->assertNull($box->fresh()->sync_error);
+        $this->assertSame(1, $box->fresh()->last_uid);
+    }
+
+    public function test_bcc_is_preserved_and_cannot_change_in_an_idempotent_retry(): void
+    {
+        Queue::fake();
+        [$admin, $member, $other, $box] = $this->workspace();
+        $url = '/workspace/mailboxes/'.$box->id.'/messages';
+        $data = ['request_id' => (string) Str::uuid(), 'to' => ['client@example.test'], 'bcc' => ['private@example.test'], 'subject' => 'Test', 'body' => 'Bonjour'];
+        $id = $this->actingAs($member)->postJson($url, $data)->assertAccepted()->assertJsonPath('bcc.0', 'private@example.test')->json('id');
+        $this->postJson($url, $data)->assertOk()->assertJsonPath('id', $id);
+        $this->postJson($url, array_replace($data, ['bcc' => ['different@example.test']]))->assertStatus(409);
+        Queue::assertPushed(SendMessageJob::class, 1);
+    }
+
+    public function test_local_folders_are_reversible_and_scoped_to_readers(): void
+    {
+        [$admin, $member, $other, $box] = $this->workspace();
+        $first = $this->received($box); $second = $this->received($box);
+        $url = '/workspace/mailboxes/'.$box->id.'/messages';
+        $this->actingAs($member)->putJson('/workspace/messages/'.$first->id.'/folder', ['folder' => 'archive'])->assertOk();
+        $this->getJson($url.'?folder=inbox')->assertOk()->assertJsonPath('total', 1)->assertJsonPath('data.0.id', $second->id);
+        $this->getJson($url.'?folder=archive')->assertOk()->assertJsonPath('total', 1)->assertJsonPath('data.0.id', $first->id);
+        $this->putJson('/workspace/messages/'.$first->id.'/folder', ['folder' => 'trash'])->assertOk();
+        $this->getJson($url.'?folder=trash')->assertOk()->assertJsonPath('data.0.id', $first->id);
+        $this->actingAs($other)->putJson('/workspace/messages/'.$first->id.'/folder', ['folder' => 'inbox'])->assertNotFound();
+        $this->actingAs($member)->putJson('/workspace/messages/'.$first->id.'/folder', ['folder' => 'inbox'])->assertOk();
+        $this->getJson($url.'?folder=inbox')->assertOk()->assertJsonPath('total', 2);
+        $this->putJson('/workspace/messages/'.$first->id.'/folder', ['folder' => 'invalid'])->assertUnprocessable();
+        $outbound = $second->replicate(); $outbound->direction = 'outbound'; $outbound->save();
+        $this->putJson('/workspace/messages/'.$outbound->id.'/folder', ['folder' => 'archive'])->assertUnprocessable();
     }
 
     public function test_read_tracking_is_per_user_and_never_exposed_to_another_company(): void
@@ -273,7 +343,7 @@ class MailFlowTest extends TestCase
         Queue::fake();
         Storage::fake('local');
         [$admin, $member, $other, $box] = $this->workspace();
-        $second = User::factory()->create(['company_id' => $box->company_id, 'role' => 'member']);
+        $second = User::factory()->create(['company_id' => $box->company_id, 'role' => 'member', 'permissions' => array_merge(User::DEFAULT_PERMISSIONS, ['view_send_activity', 'view_read_activity'])]);
         $box->users()->attach($second);
         $original = $this->received($box);
         Storage::disk('local')->put('mail/original', 'original attachment');

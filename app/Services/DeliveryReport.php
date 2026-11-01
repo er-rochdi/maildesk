@@ -51,10 +51,11 @@ class DeliveryReport
         if (! $original) {
             return;
         }
-        $recipients = array_map('strtolower', array_merge($original->to, $original->cc ?? []));
+        $recipients = array_map('strtolower', array_merge($original->to, $original->cc ?? [], $original->bcc ?? []));
         $failed = array_filter($data['failures'], fn ($failure) => in_array($failure['recipient'], $recipients, true));
         if ($failed) {
-            $summary = implode(', ', array_map(fn ($failure) => $failure['recipient'].' ('.$failure['status'].')', $failed));
+            $visible = array_map('strtolower', array_merge($original->to, $original->cc ?? []));
+            $summary = implode(', ', array_map(fn ($failure) => (in_array($failure['recipient'], $visible, true) ? $failure['recipient'] : 'destinataire en copie cachée').' ('.$failure['status'].')', $failed));
             $original->update(['delivery_error' => mb_substr('Non-remise signalée : '.$summary, 0, 255), 'delivery_report_id' => $report->id]);
         }
     }

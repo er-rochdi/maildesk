@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Exceptions\MailAttachmentUnavailable;
 use App\Models\Message;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
@@ -36,10 +37,18 @@ class ResendMailSender
         if ($message->cc) {
             $payload['cc'] = $message->cc;
         }
+        if ($message->bcc) {
+            $payload['bcc'] = $message->bcc;
+        }
         if ($message->attachments->isNotEmpty()) {
-            $payload['attachments'] = $message->attachments->map(fn ($file) => [
-                'filename' => $file->name, 'content' => base64_encode(Storage::disk('local')->get($file->path)),
-            ])->all();
+            $payload['attachments'] = $message->attachments->map(function ($file) {
+                $content = Storage::disk('local')->get($file->path);
+                if (! is_string($content)) {
+                    throw new MailAttachmentUnavailable;
+                }
+
+                return ['filename' => $file->name, 'content' => base64_encode($content)];
+            })->all();
         }
         // No automatic HTTP retry: the job retains the existing uncertain-send protection.
         $response = Http::withToken($key)->acceptJson()->connectTimeout(10)->timeout(30)

@@ -25,7 +25,7 @@ class SyncMailbox
             $mailbox->refresh();
             $batch = $this->gateway->receive($mailbox);
             $last = $mailbox->uid_validity === $batch['validity'] ? $mailbox->last_uid : 0;
-            foreach (collect($batch['messages'])->sortBy('remote_uid') as $item) {
+            foreach ($batch['messages'] as $item) {
                 $paths = [];
                 try {
                     DB::transaction(function () use ($mailbox, $batch, $item, &$paths) {
