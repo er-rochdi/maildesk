@@ -27,6 +27,7 @@ Route::middleware(['auth', EnsureActiveAccount::class])->group(function () {
     Route::get('/workspace/mailboxes/{mailbox}/messages', [MessageController::class, 'index']);
     Route::post('/workspace/mailboxes/{mailbox}/messages', [MessageController::class, 'store'])->middleware('throttle:20,1,mail-send:');
     Route::post('/workspace/mailboxes/{mailbox}/sync', [MessageController::class, 'sync'])->middleware('throttle:3,1,mail-sync:');
+    Route::get('/workspace/mail-notifications', [MessageController::class, 'notifications']);
     Route::get('/workspace/messages/{message}', [MessageController::class, 'show']);
     Route::put('/workspace/messages/{message}/folder', [MessageController::class, 'folder']);
     Route::get('/workspace/messages/{message}/team', [MessageTeamController::class, 'show']);

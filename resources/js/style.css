@@ -84,3 +84,9 @@ select:disabled{background-color:#f7f8fc;color:#99a3b5;cursor:not-allowed}
 @media(max-width:1050px){.conversation-layout{grid-template-columns:280px minmax(0,1fr)}.mail-workspace{padding:24px 20px}.conversation{padding:20px}}
 @media(max-width:760px){.mail-toolbar{align-items:flex-start;flex-direction:column}.mail-toolbar h1{font-size:22px}.mail-toolbar .muted{font-size:12px}.mail-filters{align-items:stretch;gap:8px}.mail-filters label{width:100%;min-width:0;flex:1 1 100%}.mail-filters select{width:100%}.mail-filters form{flex-basis:100%}.mail-filters form .secondary{padding:9px}.conversation-layout{display:block;min-height:50vh}.conversation-list{border:0}.conversation-placeholder{display:none}.has-selection .conversation-list{display:none}.back-to-list{display:inline-flex;margin-bottom:20px}.conversation{padding:20px 14px}.mail-workspace{padding:24px 15px}.row-meta{flex-wrap:wrap}.modal-bg{padding:12px}.modal{padding:22px}.compose-modal textarea{font-size:13px}}
 .mailbox-edit{margin-left:auto}
+.sidebar nav .unread-badge{margin-left:auto;flex-shrink:0;min-width:22px;padding:3px 5px;border-radius:12px;background:#5355db;color:white;text-align:center;font-size:10px;line-height:1.4}
+.sidebar nav .inbox-nav.has-unread.active::after{display:none}
+.mail-notification{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.mail-notification>span{flex:1;min-width:150px}
+.mail-notification button{float:none;flex-shrink:0}
+@media(max-width:760px){.sidebar nav .unread-badge{position:absolute;top:2px;right:0;min-width:18px;padding:2px 4px;font-size:9px}}

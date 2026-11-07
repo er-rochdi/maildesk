@@ -69,6 +69,25 @@ test('moving the last message on page two reloads the first page', async t => {
   assert.deepEqual([...state.items], [remaining]);
 });
 
+for (const folder of ['archive', 'trash', 'inbox']) {
+  test(`opening the inbox from a notification clears ${folder} filters and ignores pending details`, async t => {
+    const { state, calls, pending, reads } = workspace(t);
+    await Vue.nextTick();
+    state.folder = folder; state.search = 'old-query'; state.currentPage = 2;
+    const opening = state.open({ id: 7 });
+    calls.length = 0;
+    await state.showInbox();
+    pending.get(7)({ id: 7 });
+    await opening;
+    assert.equal(state.folder, 'inbox');
+    assert.equal(state.search, '');
+    assert.equal(state.currentPage, 1);
+    assert.equal(state.selected, null);
+    assert.deepEqual(reads, []);
+    assert.deepEqual(calls, ['/workspace/mailboxes/1/messages?direction=inbound&folder=inbox&q=&page=1']);
+  });
+}
+
 test('adds the personal signature when composing and preserves the quoted message', async t => {
   const { state } = workspace(t, { signature: 'Cordialement,\nAmina' });
   state.newMessage();
@@ -77,6 +96,44 @@ test('adds the personal signature when composing and preserves the quoted messag
   state.newMessage('reply');
   assert.ok(state.compose.body.indexOf('Cordialement,\nAmina') < state.compose.body.indexOf('Texte original'));
   assert.equal(state.compose.reply_to_id, 7);
+});
+
+test('opens HTML automatically when available and falls back to text for the next message', async t => {
+  const messages = {
+    7: { id: 7, body: 'Texte', html_body: '<p>Version HTML</p>' },
+    8: { id: 8, body: 'Texte seulement', html_body: null },
+  };
+  const { state } = workspace(t, { api: async url => {
+    return messages[Number(url.split('/')[3])] || { data: [], last_page: 1 };
+  } });
+  await state.open({ id: 7 });
+  assert.equal(state.showHtml, true);
+  assert.ok(state.htmlDocument.includes('<p>Version HTML</p>'));
+  state.showHtml = false;
+  await state.open({ id: 7 });
+  assert.equal(state.showHtml, true);
+  await state.open({ id: 8 });
+  assert.equal(state.showHtml, false);
+  assert.equal(state.selected.body, 'Texte seulement');
+});
+
+test('preserves the chosen text view when the read response arrives', async t => {
+  const detail = { id: 7, html_body: '<p>Version HTML</p>' };
+  let finishRead, notifyRead;
+  const readStarted = new Promise(resolve => { notifyRead = resolve; });
+  const { state } = workspace(t, { api: async (url, options) => {
+    if (options?.method === 'POST') {
+      return new Promise(resolve => { finishRead = resolve; notifyRead(); });
+    }
+    return url === '/workspace/messages/7' ? detail : { data: [], last_page: 1 };
+  } });
+  const opening = state.open({ id: 7 });
+  await readStarted;
+  assert.equal(state.showHtml, true);
+  state.showHtml = false;
+  finishRead(detail);
+  await opening;
+  assert.equal(state.showHtml, false);
 });
 
 test('does not record a read when the user leaves before message details arrive', async t => {

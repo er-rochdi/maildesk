@@ -8,6 +8,7 @@ Application Laravel 12 / Vue 3 indépendante pour plusieurs sociétés et leurs 
 - Configuration et modification des connexions Hestia : IMAP SSL 993, SMTP STARTTLS 587 ou SSL 465. Certificat TLS vérifié ; serveurs à adresse IPv4 publique uniquement.
 - Synchronisation incrémentale d’INBOX par lots de 50 messages, toutes les minutes ou sur demande. La première synchronisation importe progressivement l’historique, des plus anciens aux plus récents. Les suppressions/déplacements effectués dans le webmail ne sont pas répliqués dans cette archive locale.
 - Recherche, pagination, lecture en texte ou en HTML isolé, pièces jointes en stockage privé et téléchargement contrôlé. Les nouveaux emails synchronisés conservent une version HTML épurée si elle existe ; les emails déjà importés conservent leur texte.
+- Compteur personnel des emails non lus dans la réception et alerte dans l’application lors de nouveaux emails synchronisés, sur toutes les pages. Vérification toutes les 15 secondes lorsque l’onglet est visible, selon les droits de lecture et les boîtes accessibles.
 - Nouveau message, réponse avec référence au message initial et transfert avec pièces jointes ; À et Cc.
 - Ajout de destinataires en copie cachée (Cci) et d’une signature personnelle en texte dans Mon profil.
 - Suivi d’équipe par message : attribution à un lecteur autorisé de la boîte, statut de traitement et notes internes.

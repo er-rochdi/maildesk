@@ -38,6 +38,27 @@ class MessageController extends Controller
             ->through(fn ($message) => $message->visibleActivityFor($request->user()));
     }
 
+    public function notifications(Request $request)
+    {
+        $user = $request->user();
+        abort_unless($user->company_id !== null && $user->hasPermission('read_emails'), 403);
+        $data = $request->validate(['after' => 'nullable|integer|min:0']);
+        $mailboxIds = Mailbox::where('company_id', $user->company_id)
+            ->when($user->role !== 'admin', fn ($query) => $query->whereHas('users', fn ($query) => $query->where('users.id', $user->id)))
+            ->orderBy('id')->pluck('id');
+        $messages = Message::whereIn('mailbox_id', $mailboxIds)->where('direction', 'inbound');
+        $latestId = (int) (clone $messages)->max('id');
+        // Bound counts to this snapshot so the next poll still sees concurrent arrivals.
+        $unread = (clone $messages)->where('id', '<=', $latestId)->where('local_folder', 'inbox')
+            ->whereDoesntHave('readers', fn ($query) => $query->where('users.id', $user->id));
+
+        return response()->json([
+            'mailbox_ids' => $mailboxIds, 'latest_id' => $latestId,
+            'unread_count' => (clone $unread)->count(),
+            'new_count' => isset($data['after']) ? (clone $unread)->where('id', '>', $data['after'])->count() : 0,
+        ])->header('Cache-Control', 'no-store');
+    }
+
     public function show(Request $request, Message $message)
     {
         $this->authorizeMailbox($request, $message->mailbox);

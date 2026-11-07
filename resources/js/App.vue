@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import AppIcon from './components/AppIcon.vue';
 import MailWorkspace from './components/MailWorkspace.vue';
 import AdminDashboard from './components/AdminDashboard.vue';
@@ -9,6 +9,9 @@ import { api as request } from './api.js';
 
 const user = ref(null), page = ref('inbox'), loading = ref(true), error = ref(''), notice = ref('');
 const authMode = ref('login'), boxes = ref([]), users = ref([]), selected = ref(null);
+const unreadCount = ref(0), newMailCount = ref(0), notificationError = ref('');
+const mailWorkspace = ref(null);
+let notificationCursor = null, notificationScope = null, notificationBusy = false, notificationVersion = 0, notificationTimer;
 const auth = ref({ company: '', name: '', email: '', password: '', password_confirmation: '' });
 const defaultPermissions = ['read_emails', 'send_emails', 'sync_mailboxes'];
 const person = ref({ name: '', email: '', password: '', role: 'member', permissions: [...defaultPermissions] });
@@ -51,6 +54,34 @@ async function refresh() {
   boxes.value = await api('/workspace/mailboxes');
   if (can('manage_users') || can('manage_mailboxes')) users.value = await api('/workspace/users');
 }
+function resetNotifications() {
+  ++notificationVersion; notificationBusy = false;
+  notificationCursor = null; notificationScope = null;
+  unreadCount.value = 0; newMailCount.value = 0; notificationError.value = '';
+}
+async function pollNotifications() {
+  if (!can('read_emails') || notificationBusy) return;
+  const version = notificationVersion;
+  notificationBusy = true;
+  try {
+    const data = await api('/workspace/mail-notifications' + (notificationCursor === null ? '' : `?after=${notificationCursor}`));
+    if (version !== notificationVersion) return;
+    const scope = data.mailbox_ids.join(',');
+    if (notificationScope === scope) newMailCount.value += data.new_count;
+    else newMailCount.value = 0;
+    notificationScope = scope;
+    notificationCursor = Math.max(notificationCursor ?? 0, data.latest_id);
+    unreadCount.value = data.unread_count;
+    if (!unreadCount.value) newMailCount.value = 0;
+    notificationError.value = '';
+  } catch (e) {
+    if (version !== notificationVersion) return;
+    if (e.status === 403) { unreadCount.value = 0; newMailCount.value = 0; notificationScope = null; notificationCursor = null; }
+    notificationError.value = 'Impossible d’actualiser les notifications : ' + e.message;
+  } finally { if (version === notificationVersion) notificationBusy = false; }
+}
+function checkNotifications() { if (!document.hidden) return pollNotifications(); }
+watch(() => [user.value?.id, can('read_emails')], () => { resetNotifications(); pollNotifications(); });
 async function init() {
   if (location.pathname?.startsWith('/reset-password/')) {
     resetToken.value = location.pathname.slice('/reset-password/'.length);
@@ -118,7 +149,22 @@ function addBox() {
 }
 function toggleAccess(mailbox, u, checked) { mailbox.users = checked ? [...mailbox.users, u] : mailbox.users.filter(x => x.id !== u.id); }
 function changePage(value) { page.value = value; error.value = ''; notice.value = ''; selected.value = null; }
-onMounted(init);
+async function viewInbox() {
+  changePage('inbox');
+  await nextTick();
+  if (!mailWorkspace.value) return;
+  await mailWorkspace.value.showInbox();
+  newMailCount.value = 0;
+}
+onMounted(() => {
+  init();
+  notificationTimer = setInterval(checkNotifications, 15000);
+  document.addEventListener('visibilitychange', checkNotifications);
+});
+onBeforeUnmount(() => {
+  resetNotifications(); clearInterval(notificationTimer);
+  document.removeEventListener('visibilitychange', checkNotifications);
+});
 </script>
 <template>
   <div v-if="loading" class="loading">Chargement…</div>
@@ -141,7 +187,7 @@ onMounted(init);
         <div class="company"><div class="company-avatar">{{ user.company?.name?.slice(0,1).toUpperCase() }}</div><div class="company-details"><strong>{{ user.company?.name }}</strong><small>Espace de travail</small></div></div>
         <nav aria-label="Navigation principale">
           <button v-if="can('view_dashboard')" :class="{active: page === 'dashboard'}" :aria-current="page === 'dashboard' ? 'page' : undefined" title="Tableau de bord" @click="changePage('dashboard')"><AppIcon name="dashboard" /><span>Tableau de bord</span></button>
-          <button v-if="canUseMail" :class="{active: page === 'inbox'}" :aria-current="page === 'inbox' ? 'page' : undefined" title="Boîte de réception" @click="changePage('inbox')"><AppIcon name="mail" /><span>Boîte de réception</span></button>
+          <button v-if="canUseMail" class="inbox-nav" :class="{active: page === 'inbox', 'has-unread': unreadCount > 0}" :aria-current="page === 'inbox' ? 'page' : undefined" :aria-label="unreadCount ? `Boîte de réception, ${unreadCount} email(s) non lu(s)` : 'Boîte de réception'" title="Boîte de réception" @click="changePage('inbox')"><AppIcon name="mail" /><span>Boîte de réception</span><small v-if="unreadCount" class="unread-badge" aria-hidden="true">{{ unreadCount > 99 ? '99+' : unreadCount }}</small></button>
           <button v-if="can('read_emails')" :class="{active: page === 'sent'}" :aria-current="page === 'sent' ? 'page' : undefined" title="Envoyés" @click="changePage('sent')"><AppIcon name="send" /><span>Envoyés</span></button>
           <button :class="{active: page === 'boxes'}" :aria-current="page === 'boxes' ? 'page' : undefined" title="Boîtes mail" @click="changePage('boxes')"><AppIcon name="inbox" /><span>Boîtes mail</span></button>
           <button v-if="can('manage_users')" :class="{active: page === 'users'}" :aria-current="page === 'users' ? 'page' : undefined" title="Utilisateurs" @click="changePage('users')"><AppIcon name="users" /><span>Utilisateurs</span></button>
@@ -151,9 +197,11 @@ onMounted(init);
       <div class="profile"><div class="avatar">{{ user.name?.slice(0,2).toUpperCase() }}</div><div class="profile-details"><strong>{{ user.name }}</strong><small>{{ isAdmin ? 'Administrateur' : 'Membre' }}</small></div><button class="logout" @click="logout" title="Se déconnecter" aria-label="Se déconnecter"><AppIcon name="logout" /></button></div>
     </aside>
     <main class="main"><div v-if="notice" class="notice">{{ notice }} <button @click="notice = ''">×</button></div><div v-if="error" class="alert top-alert">{{ error }}</div>
+      <div v-if="newMailCount" class="notice mail-notification" role="status"><span>{{ newMailCount === 1 ? 'Un nouvel email reçu dans vos boîtes.' : `${newMailCount} nouveaux emails reçus dans vos boîtes.` }}</span><button type="button" class="link" @click="viewInbox">Voir la réception</button><button type="button" aria-label="Fermer la notification" @click="newMailCount = 0">×</button></div>
+      <div v-if="notificationError" class="alert top-alert" role="status">{{ notificationError }}</div>
       <ProfileSettings v-if="page === 'profile'" :api="api" :user="user" @updated="user = $event" @notice="notice = $event" />
       <AdminDashboard v-if="page === 'dashboard' && can('view_dashboard')" :api="api" :boxes="accessibleBoxes" :can-view-send-activity="can('view_send_activity')" :can-view-read-activity="can('view_read_activity')" />
-      <MailWorkspace v-if="(page === 'inbox' || page === 'sent') && canUseMail" :api="api" :boxes="accessibleBoxes" :signature="user.signature || ''" :can-read="can('read_emails')" :can-send="can('send_emails')" :can-sync="can('sync_mailboxes')" :direction="page === 'inbox' ? 'inbound' : 'outbound'" @notice="notice = $event" @error="error = $event" />
+      <MailWorkspace v-if="(page === 'inbox' || page === 'sent') && canUseMail" ref="mailWorkspace" :api="api" :boxes="accessibleBoxes" :signature="user.signature || ''" :can-read="can('read_emails')" :can-send="can('send_emails')" :can-sync="can('sync_mailboxes')" :direction="page === 'inbox' ? 'inbound' : 'outbound'" @notice="notice = $event" @error="error = $event" @mail-changed="pollNotifications" />
       <section v-if="page === 'boxes'" class="content"><header class="page-header"><div><h1>Boîtes mail</h1><p class="muted">Gérez vos adresses et les accès de votre équipe.</p></div><button v-if="can('manage_mailboxes')" class="primary" @click="addBox"><AppIcon name="plus" />Ajouter une boîte</button></header>
         <div v-if="!boxes.length" class="empty-card"><div class="empty-icon"><AppIcon name="inbox" /></div><h3>Aucune boîte pour le moment</h3><p>Ajoutez votre première adresse professionnelle pour commencer.</p><button v-if="can('manage_mailboxes')" class="primary" @click="addBox"><AppIcon name="plus" />Ajouter une boîte</button></div>
         <div v-for="mailbox in boxes" :key="mailbox.id" class="box-card"><div class="box-head"><div class="box-avatar"><AppIcon name="mail" /></div><div><h3>{{ mailbox.name }}</h3><p>{{ mailbox.email }}</p></div><button v-if="can('manage_mailboxes')" class="secondary mailbox-edit" @click="editBox(mailbox)">Configurer</button></div><div v-if="can('manage_mailboxes')" class="access"><strong>Accès à la boîte</strong><p class="muted">Choisissez les membres qui peuvent accéder à cette boîte.</p><div class="checks"><label v-for="u in users" :key="u.id"><input type="checkbox" :checked="mailbox.users.some(x => x.id === u.id)" @change="toggleAccess(mailbox, u, $event.target.checked)"> {{ u.name }} <small>({{ u.email }})</small></label></div><button class="secondary" :disabled="saving" @click="saveAccess(mailbox)">Enregistrer les accès</button></div></div>

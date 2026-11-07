@@ -40,6 +40,66 @@ class MailFlowTest extends TestCase
         return Message::create(['mailbox_id' => $box->id, 'direction' => 'inbound', 'status' => 'received', 'from_address' => 'client@example.test', 'to' => [$box->email], 'subject' => 'Demande', 'body' => '<script>alert(1)</script> Bonjour', 'message_at' => now()]);
     }
 
+    public function test_notifications_count_only_the_current_users_unread_inbox_and_new_arrivals(): void
+    {
+        [$admin, $member, , $box] = $this->workspace();
+        $old = $this->received($box);
+        $old->readers()->attach($admin->id, ['read_at' => now()]);
+        $archived = $this->received($box);
+        $archived->update(['local_folder' => 'archive']);
+        $trash = $this->received($box);
+        $trash->update(['local_folder' => 'trash']);
+        $outbound = $this->received($box);
+        $outbound->update(['direction' => 'outbound', 'status' => 'sent']);
+        $url = '/workspace/mail-notifications';
+        $this->actingAs($member)->getJson($url)->assertOk()->assertHeader('Cache-Control', 'no-store, private')
+            ->assertExactJson(['mailbox_ids' => [$box->id], 'latest_id' => $trash->id, 'unread_count' => 1, 'new_count' => 0]);
+        $this->postJson('/workspace/messages/'.$old->id.'/read')->assertOk();
+        $new = $this->received($box);
+        // Even with an unchanged unread total, a new arrival must be detected.
+        $this->getJson($url.'?after='.$trash->id)->assertOk()->assertJsonPath('unread_count', 1)->assertJsonPath('new_count', 1)->assertJsonPath('latest_id', $new->id);
+        $archived->update(['local_folder' => 'inbox']);
+        $this->getJson($url.'?after='.$new->id)->assertOk()->assertJsonPath('unread_count', 2)->assertJsonPath('new_count', 0);
+        $this->actingAs($admin)->getJson($url)->assertOk()->assertJsonPath('unread_count', 2);
+        $this->assertDatabaseCount('message_reads', 2);
+    }
+
+    public function test_notifications_respect_company_and_mailbox_access_including_revocation(): void
+    {
+        [$admin, $member, $foreign, $box] = $this->workspace();
+        $visible = $this->received($box);
+        $unassigned = $box->replicate();
+        $unassigned->email = 'unassigned@example.test'; $unassigned->save();
+        $this->received($unassigned);
+        $foreignBox = $box->replicate();
+        $foreignBox->company_id = $foreign->company_id; $foreignBox->email = 'foreign@example.test'; $foreignBox->save();
+        $this->received($foreignBox);
+        $url = '/workspace/mail-notifications?after=0';
+        $this->actingAs($member)->getJson($url)->assertOk()->assertExactJson([
+            'mailbox_ids' => [$box->id], 'latest_id' => $visible->id, 'unread_count' => 1, 'new_count' => 1,
+        ]);
+        $this->actingAs($admin)->getJson($url)->assertOk()->assertJsonPath('unread_count', 2)->assertJsonPath('new_count', 2)->assertJsonCount(2, 'mailbox_ids');
+        $box->users()->detach($member);
+        $this->actingAs($member)->getJson($url)->assertOk()->assertExactJson([
+            'mailbox_ids' => [], 'latest_id' => 0, 'unread_count' => 0, 'new_count' => 0,
+        ]);
+    }
+
+    public function test_notifications_require_read_permission_an_active_session_and_a_valid_cursor(): void
+    {
+        [, $member] = $this->workspace();
+        $url = '/workspace/mail-notifications';
+        $this->getJson($url)->assertUnauthorized();
+        $this->actingAs($member)->getJson($url.'?after=-1')->assertUnprocessable();
+        $this->getJson($url.'?after=invalid')->assertUnprocessable();
+        $member->update(['permissions' => ['sync_mailboxes', 'view_dashboard', 'manage_mailboxes']]);
+        $this->getJson($url)->assertForbidden();
+        $member->update(['permissions' => null]);
+        $this->getJson($url)->assertOk();
+        $member->forceFill(['is_active' => false])->save();
+        $this->getJson($url)->assertUnauthorized();
+    }
+
     public function test_sync_is_idempotent_preserves_reads_and_handles_uid_validity_change(): void
     {
         Storage::fake('local');

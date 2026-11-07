@@ -3,7 +3,7 @@ import { ref, computed, watch, onBeforeUnmount, nextTick } from 'vue';
 import AppIcon from './AppIcon.vue';
 import MessageTeam from './MessageTeam.vue';
 const props = defineProps({ api: Function, boxes: Array, direction: String, signature: { type: String, default: '' }, canRead: { type: Boolean, default: true }, canSend: { type: Boolean, default: true }, canSync: { type: Boolean, default: true } });
-const emit = defineEmits(['notice', 'error']);
+const emit = defineEmits(['notice', 'error', 'mail-changed']);
 const mailboxId = ref(''), items = ref([]), selected = ref(null), search = ref(''), currentPage = ref(1), lastPage = ref(1), busy = ref(false), syncing = ref(false);
 const compose = ref(null), sendBusy = ref(false), composeError = ref(''), attachments = ref([]), statusBox = ref(null);
 const folder = ref('inbox'), moving = ref(false);
@@ -31,11 +31,11 @@ async function open(message) {
   try {
     const detail = await props.api(`/workspace/messages/${message.id}`);
     if (version !== detailVersion) return;
-    selected.value = detail; await nextTick();
+    selected.value = detail; showHtml.value = Boolean(detail.html_body); await nextTick();
     if (version !== detailVersion || selected.value?.id !== message.id) return;
     const updated = await props.api(`/workspace/messages/${message.id}/read`, { method: 'POST' });
     if (version !== detailVersion) return;
-    selected.value = updated; message.read_by_me = true;
+    selected.value = updated; message.read_by_me = true; emit('mail-changed');
   } catch (e) { if (version === detailVersion) emit('error', e.message); }
 }
 async function sync() {
@@ -48,11 +48,14 @@ async function move(folderName) {
   const id = selected.value.id, version = detailVersion; moving.value = true;
   try {
     await props.api(`/workspace/messages/${id}/folder`, { method: 'PUT', body: JSON.stringify({ folder: folderName }) });
+    emit('mail-changed');
     if (version === detailVersion && selected.value?.id === id) { selected.value = null; ++detailVersion; currentPage.value = 1; await load(); }
     emit('notice', 'Classement mis à jour dans Maildesk.');
   } catch (e) { emit('error', e.message); } finally { moving.value = false; }
 }
-function changeFolder() { ++detailVersion; selected.value = null; currentPage.value = 1; load(); }
+function changeFolder() { ++detailVersion; selected.value = null; currentPage.value = 1; return load(); }
+function showInbox() { folder.value = 'inbox'; search.value = ''; return changeFolder(); }
+defineExpose({ showInbox });
 function requestId() {
   const bytes = crypto.getRandomValues(new Uint8Array(16));
   bytes[6] = (bytes[6] & 15) | 64; bytes[8] = (bytes[8] & 63) | 128;
